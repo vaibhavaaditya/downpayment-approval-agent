@@ -8,9 +8,20 @@ and *what changes in a real project?*
 
 ### In this repo
 
-`src/dpa_agent/sap/client.py` defines one interface (`SapClient`) with two
-implementations: an in-memory mock and an HTTP client speaking OData-flavored
-REST paths. Swapping them is a config value (`SAP_ODATA_BASE_URL`).
+`src/dpa_agent/sap/client.py` defines one read-only interface (`SapClient`) with two
+implementations: an in-memory mock and `ODataSapClient`, which speaks to an OData-style
+HTTP service. The bundled mock server (`python -m dpa_agent.sap.mock_odata`) serves the same
+data in an OData V2 dialect: `d` envelope, `/Date(ms)/` dates, decimals as strings, SAP-style
+field names and error bodies. Swapping implementations is a config value (`SAP_ODATA_BASE_URL`).
+
+What this does and does not prove: the client's mapping layer (the anti-corruption layer) is
+exactly the work a real adapter does, and `tests/test_sap_odata.py` checks that the HTTP path
+returns the same domain objects, and the same decisions, as the in-memory path. It does **not**
+prove compatibility with real S/4HANA payloads: the entity shapes are simplified and only
+loosely modelled on S/4HANA API entities.
+
+SAP also offers a public API sandbox (free API key, read calls) that is useful for testing
+payload shapes without owning a system; check its current availability before relying on it.
 
 ### In a real S/4HANA project
 
@@ -18,7 +29,7 @@ REST paths. Swapping them is a config value (`SAP_ODATA_BASE_URL`).
 |---|---|---|
 | Down-payment requests | **Custom CDS view / custom OData service** on special-GL (BSEG/BKPF) requests, or a wrapper around the Fiori "Down Payment Request" app | S/4HANA has no standard *queue* API for pending DP approvals — the request object is usually custom or workflow-backed |
 | Purchase orders | Released API `A_PurchaseOrder` / `A_PurchaseOrderItem` (OData, API Business Hub) | standard, versioned |
-| Vendor master + bank | `A_Supplier`, `A_SupplierBankDetails` | **bank data is the fraud-sensitive field** — read-only, access-logged |
+| Vendor master + bank | `A_Supplier` plus the business-partner bank data in the Business Partner API (verify the exact entity names for your release in API Business Hub) | **bank data is the fraud-sensitive field** — read-only, access-logged. The bank-change **date** (change documents) feeds the `bank_recent_change` check |
 | Payment history / prior DPs | CDS on BSEG (special GL indicator), or `A_AccountingDocument` | often needs a purpose-built CDS view for performance |
 | Policy documents | SharePoint/ServiceNow/wiki → your RAG store | keep clause IDs stable across systems |
 
@@ -78,11 +89,11 @@ before a single recommendation influences real money.
 ## 4. Build order if you took this to a real system
 
 1. Stand up the custom CDS view for DP requests + released PO/vendor APIs in a
-   QAS landscape; implement `HttpSapClient` against them behind Integration Suite.
+   QAS landscape; implement the real adapter (the mapping layer of `ODataSapClient`) against them behind Integration Suite.
 2. Wrap evaluation in a Build Process Automation step; render output in My Inbox.
 3. Run **shadow mode** for a quarter: agent recommends, humans decide anyway,
    disagreements are reviewed by the control owner.
-4. Gate on metrics: unsafe-approval rate (must be 0 against the golden set),
+4. Gate on metrics: unsafe-approval rate (must be 0 against the golden set, including the cases only a model can catch),
    override rate, citation validity.
 5. Only then let the recommendation pre-fill the approver's decision — still
    human, still in SAP, still logged.

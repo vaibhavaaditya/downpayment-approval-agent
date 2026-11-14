@@ -1,11 +1,14 @@
 """The LangGraph state machine for one down-payment evaluation.
 
-    START -> load_context -> run_checks -> (retrieve_policy | skip) -> propose
-           -> guardrail -> record_audit -> END
+    START -> load_context -(ok)-> run_checks -> retrieve_policy -> propose -> guardrail
+                  |                                                              ^
+                  +-(SAP data missing)-------------------------------------------+
+    guardrail -> record_audit -> END
 
-The single conditional edge exists because policy retrieval is only worth doing
-when a check flagged something — passing requests cite the checks themselves.
-Everything else is linear on purpose: fewer branch states = easier audit story.
+The single conditional edge routes a request whose SAP data could not be loaded straight
+to the guardrail: there is nothing to check and no reason to spend a model call on it, and
+the guardrail turns "incomplete evaluation" into HOLD. Everything else is linear on
+purpose: fewer branch states = an easier audit story.
 """
 
 from __future__ import annotations
@@ -23,20 +26,16 @@ from dpa_agent.graph.nodes import (
     make_record_audit,
     make_retrieve_policy,
     make_run_checks,
-    skip_policy,
 )
 from dpa_agent.llm.client import Recommender
-from dpa_agent.models.checks import CheckStatus
 from dpa_agent.models.state import GraphState
 from dpa_agent.rag.store import PolicyStore
 from dpa_agent.sap.client import SapClient
 
 
-def _needs_policy(state: GraphState) -> str:
-    checks = state.get("checks", [])
-    if any(c.status is not CheckStatus.PASS for c in checks) or not checks:
-        return "retrieve"
-    return "skip"
+def _route_after_load(state: GraphState) -> str:
+    incomplete = state.get("errors") or "vendor" not in state or "po" not in state
+    return "error" if incomplete else "ok"
 
 
 def build_graph(
@@ -53,20 +52,18 @@ def build_graph(
     sg.add_node("load_context", make_load_context(client, limits))
     sg.add_node("run_checks", make_run_checks(limits, today=today))
     sg.add_node("retrieve_policy", make_retrieve_policy(store))
-    sg.add_node("skip_policy", skip_policy)
     sg.add_node("propose", make_propose(recommender))
     sg.add_node("guardrail", guardrail)
     sg.add_node("record_audit", make_record_audit(audit))
 
     sg.add_edge(START, "load_context")
-    sg.add_edge("load_context", "run_checks")
     sg.add_conditional_edges(
-        "run_checks",
-        _needs_policy,
-        {"retrieve": "retrieve_policy", "skip": "skip_policy"},
+        "load_context",
+        _route_after_load,
+        {"ok": "run_checks", "error": "guardrail"},
     )
+    sg.add_edge("run_checks", "retrieve_policy")
     sg.add_edge("retrieve_policy", "propose")
-    sg.add_edge("skip_policy", "propose")
     sg.add_edge("propose", "guardrail")
     sg.add_edge("guardrail", "record_audit")
     sg.add_edge("record_audit", END)
@@ -100,10 +97,10 @@ def build_default(settings: Settings | None = None):
 
     settings = settings or Settings.from_env()
     client = build_sap_client(settings.sap_base_url)
-    recommender = build_recommender(
-        settings.llm_provider, settings.anthropic_api_key, settings.anthropic_model
-    )
     store = PolicyStore.from_directory()
+    recommender = build_recommender(
+        settings.llm_provider, settings.anthropic_api_key, settings.anthropic_model, store=store
+    )
     audit = AuditLog(settings.audit_log_path)
     graph = build_graph(client, recommender, store, audit, limits=settings.limits)
     return graph, client, audit, settings

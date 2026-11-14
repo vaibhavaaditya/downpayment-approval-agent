@@ -20,6 +20,7 @@ from dpa_agent.models.recommendation import Label
 from dpa_agent.models.request import BankDetails, DownPaymentRequest
 from dpa_agent.rag.store import PolicyStore
 from dpa_agent.sap.client import MemorySapClient
+from dpa_agent.tools import CHECK_REGISTRY
 
 TODAY = date(2026, 11, 10)
 
@@ -111,7 +112,7 @@ def test_audit_log_written(graph, tmp_path: Path):
     assert entry["event"] == "recommendation"
     assert entry["request_id"] == "DPR-E2E-1"
     assert entry["final"]["label"] in {"APPROVE", "HOLD", "ESCALATE"}
-    assert "checks" in entry and len(entry["checks"]) == 6
+    assert "checks" in entry and len(entry["checks"]) == len(CHECK_REGISTRY)
 
 
 def test_policy_retrieval_runs_when_checks_flag(graph):
@@ -120,9 +121,69 @@ def test_policy_retrieval_runs_when_checks_flag(graph):
     assert all(c.clause_id.startswith("POL-") for c in state["policy_chunks"])
 
 
-def test_missing_vendor_data_yields_hold(graph):
-    bad = _request(vendor_id="V-DOES-NOT-EXIST")
-    state = evaluate(graph, bad)
+def test_missing_po_data_yields_hold(graph):
+    state = evaluate(graph, _request(po_id="PO-DOES-NOT-EXIST"))
     # load_context records an error; guardrail must not approve on incomplete facts
     assert state["final"].label is not Label.APPROVE
     assert state.get("errors")
+
+
+def test_vendor_that_is_not_the_po_vendor_escalates(graph):
+    # V-1001 is a real vendor, but PO-5003 belongs to V-1003
+    state = evaluate(graph, _request(vendor_id="V-1001"))
+    assert state["final"].label is Label.ESCALATE
+    assert any(c.check_name == "vendor_po_match" and c.is_hard_failure for c in state["checks"])
+
+
+class _Spy:
+    """A recommender that records whether it was called."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def propose(self, state):
+        self.calls += 1
+        return FallbackRecommender().propose(state)
+
+
+def test_unloadable_context_skips_the_model_and_goes_straight_to_the_guardrail(tmp_path: Path):
+    spy = _Spy()
+    graph = build_graph(
+        client=MemorySapClient(), recommender=spy, store=PolicyStore.from_directory(),
+        audit=AuditLog(tmp_path / "a.jsonl"), limits=PolicyLimits(),
+    )
+    state = evaluate(graph, _request(po_id="PO-DOES-NOT-EXIST"))
+    assert spy.calls == 0, "no model call is worth making when SAP data is missing"
+    assert state["final"].label is Label.HOLD
+    assert "draft" not in state
+
+
+def test_security_clauses_are_shown_even_when_every_check_passes(graph):
+    state = evaluate(graph, _request())  # clean request: all checks pass
+    assert all(c.status.value == "PASS" for c in state["checks"])
+    ids = {c.clause_id for c in state["policy_chunks"]}
+    assert {"POL-SEC-001", "POL-SEC-004", "POL-PAY-007"} <= ids
+
+
+def test_required_approver_is_computed_and_audited(graph, tmp_path: Path):
+    state = evaluate(graph, _request())  # 7,500 USD
+    assert state["required_approver"] == "L1_FINANCE_MANAGER"
+    import json
+
+    entry = json.loads((tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert entry["required_approver"] == "L1_FINANCE_MANAGER"
+    assert entry["request_summary"]["requested_by"] == "test"
+
+
+def test_failure_to_load_payment_history_fails_closed_instead_of_crashing(tmp_path: Path):
+    class FlakyClient(MemorySapClient):
+        def list_prior_payments(self, vendor_id, po_id):
+            raise ConnectionError("SAP unreachable")
+
+    graph = build_graph(
+        client=FlakyClient(), recommender=FallbackRecommender(), store=PolicyStore.from_directory(),
+        audit=AuditLog(tmp_path / "a.jsonl"), limits=PolicyLimits(),
+    )
+    state = evaluate(graph, _request())
+    assert state["final"].label is Label.HOLD
+    assert any("payment history" in e for e in state["errors"])

@@ -25,3 +25,10 @@ a request, but it must be weighed against the size of the advance.
 Vendors on the internal watchlist or in jurisdictions under enhanced due diligence
 require escalation regardless of amount. Risk tier is read from the vendor master,
 never from request text.
+
+## POL-RSK-005 Vendor and purchase order consistency
+
+The vendor on a down-payment request must be the vendor on the purchase order. A
+request naming a different supplier than the order is a potential fraud indicator and is
+escalated to Financial Control. The vendor master of the **purchase order's** supplier is
+the reference for bank details and risk tier.

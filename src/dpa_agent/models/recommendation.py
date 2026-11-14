@@ -18,6 +18,9 @@ class Recommendation(BaseModel):
     rationale: str
     citations: list[str] = Field(default_factory=list)  # evidence IDs + policy clause IDs
     guardrail_actions: list[str] = Field(default_factory=list)  # what code changed/validated
+    injection_suspected: bool = False  # the model saw instructions aimed at the reviewer
+    risk_flags: list[str] = Field(default_factory=list)
+    questions_for_vendor: list[str] = Field(default_factory=list)
 
 
 class HumanDecision(BaseModel):
@@ -27,4 +30,6 @@ class HumanDecision(BaseModel):
     decided_label: Label
     decided_by: str
     justification: str
+    approver_role: str = ""
+    override_reason: str | None = None
     overrode_recommendation: bool = False
