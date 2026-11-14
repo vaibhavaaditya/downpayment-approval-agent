@@ -13,6 +13,12 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 
+def mask_identifier(value: str) -> str:
+    """Keep only the last four characters: enough to recognise an account, not to use it."""
+    value = "".join(value.split())
+    return "****" + value[-4:] if value else "(none)"
+
+
 class BankDetails(BaseModel):
     """Subset of LFBK (vendor bank) vs. the remittance bank on the request."""
 
@@ -29,6 +35,18 @@ class BankDetails(BaseModel):
         acct = "".join(self.account_number.split()).upper()
         return (acct, "".join(self.bank_key.split()).upper())
 
+    def describe_masked(self) -> str:
+        """Human/LLM-readable description with account identifiers masked."""
+        iban = "".join(self.iban.split()).upper()
+        acct = "".join(self.account_number.split()).upper()
+        if iban:
+            core = f"IBAN {mask_identifier(iban)}"
+        elif acct:
+            core = f"account {mask_identifier(acct)}"
+        else:
+            core = "no account"
+        return f"{core} ({self.bank_country or '?'}, {self.bank_key or '?'})"
+
 
 class Vendor(BaseModel):
     """Flattened LFA1/LFBK vendor master."""
@@ -40,6 +58,7 @@ class Vendor(BaseModel):
     risk_tier: str = "standard"          # standard | strategic | watchlist
     on_time_delivery_pct: Decimal = Decimal("100")
     master_bank: BankDetails = Field(default_factory=BankDetails)
+    bank_changed_on: date | None = None  # last change date of the master bank (change documents)
 
 
 class POLine(BaseModel):
@@ -57,6 +76,7 @@ class PurchaseOrder(BaseModel):
     currency: str = "EUR"
     net_value: Decimal
     dp_percent_allowed: Decimal = Decimal("20")
+    status: str = "released"             # released | not_released | closed | deleted
     lines: list[POLine] = Field(default_factory=list)
 
 

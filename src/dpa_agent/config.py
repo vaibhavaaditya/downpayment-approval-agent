@@ -10,6 +10,24 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
+#: Override with ANTHROPIC_MODEL; confirm the current model id in Anthropic's docs.
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
+#: currency -> ((upper bound inclusive, role), ...); anything above the last bound needs top_role.
+ApprovalMatrix = dict[str, tuple[tuple[Decimal, str], ...]]
+
+
+def _default_matrix() -> ApprovalMatrix:
+    eur_usd = (
+        (Decimal("10000"), "L1_FINANCE_MANAGER"),
+        (Decimal("50000"), "L2_FINANCE_CONTROLLER"),
+    )
+    inr = (
+        (Decimal("1000000"), "L1_FINANCE_MANAGER"),
+        (Decimal("5000000"), "L2_FINANCE_CONTROLLER"),
+    )
+    return {"EUR": eur_usd, "USD": eur_usd, "INR": inr}
+
 
 @dataclass(frozen=True)
 class PolicyLimits:
@@ -22,13 +40,18 @@ class PolicyLimits:
     absolute_request_cap: Decimal = Decimal("500000")  # per-request cap in request currency
     duplicate_window_days: int = 90               # lookback for duplicate down payments
     min_on_time_delivery_pct: Decimal = Decimal("80")
+    bank_change_window_days: int = 30             # recently changed bank details => fraud review
+    # Approval authority by request currency. Fixed local-currency bands are a deliberate
+    # simplification of FX; an unknown currency falls back to the most senior role.
+    approval_matrix: ApprovalMatrix = field(default_factory=_default_matrix)
+    top_role: str = "L3_CFO_DELEGATE"
 
 
 @dataclass(frozen=True)
 class Settings:
     llm_provider: str = "auto"  # auto | anthropic | fallback
     anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-sonnet-4-5"
+    anthropic_model: str = DEFAULT_MODEL
     sap_base_url: str | None = None  # empty => in-memory mock dataset
     audit_log_path: Path = Path("audit/decisions.jsonl")
     limits: PolicyLimits = field(default_factory=PolicyLimits)
@@ -40,7 +63,7 @@ class Settings:
         return cls(
             llm_provider=os.environ.get("DPA_LLM_PROVIDER", "auto").strip().lower(),
             anthropic_api_key=key,
-            anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+            anthropic_model=os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL),
             sap_base_url=base,
             audit_log_path=Path(os.environ.get("AUDIT_LOG_PATH", "audit/decisions.jsonl")),
         )

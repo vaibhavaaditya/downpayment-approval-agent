@@ -1,6 +1,7 @@
 """Prompt-injection scan over untrusted vendor document text.
 
-The vendor free-text field is attacker-controlled input. This regex detector is
+The vendor free-text field (and anything pasted into the request purpose) is
+attacker-controlled input. This regex detector is
 deliberately coarse: a hit HARD-fails and forces ESCALATE, so a false positive
 costs a human review, while a missed detection is backstopped by the guardrail
 (the model cannot cite anything that authorizes ignoring policy).
@@ -43,11 +44,24 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "reveal_prompt",
         re.compile(r"(reveal|print|repeat|output)\s+[^.?!]*\s(system\s+prompt|instructions)", re.I),
     ),
+    ("system_prompt_reference", re.compile(r"system\s+prompt", re.I)),
+    ("as_an_ai", re.compile(r"\bas\s+an\s+ai\b", re.I)),
+    (
+        "force_status",
+        re.compile(
+            r"(mark|set|record|classify)\s+(this|it|the\s+request)\s+"
+            r"(as\s+)?(approved|low[-\s]?risk)",
+            re.I,
+        ),
+    ),
+    ("approve_directive", re.compile(r"\bapprove\s+(this|the)\s+(request|payment)\b", re.I)),
+    ("suppress_controls", re.compile(r"do\s+not\s+(flag|escalate|hold)\b", re.I)),
 ]
 
 
 def scan_injection(ctx: ToolContext) -> CheckResult:
-    text = ctx.request.vendor_document_text or ""
+    # `purpose` is entered by the requester but often pastes vendor wording: scan both.
+    text = f"{ctx.request.vendor_document_text or ''}\n{ctx.request.purpose or ''}"
     if not text.strip():
         return CheckResult(
             check_name=CHECK_NAME,

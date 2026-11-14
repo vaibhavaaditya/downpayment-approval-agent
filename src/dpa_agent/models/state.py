@@ -20,6 +20,8 @@ class GraphState(TypedDict, total=False):
     prior_payments: list[PriorPayment]
     checks: list[CheckResult]
     policy_chunks: list[PolicyChunk]
+    required_approver: str       # deterministic approval authority for this amount
     draft: Recommendation        # model output, pre-guardrail
+    model_meta: dict             # model id, prompt version, token usage
     final: Recommendation        # post-guardrail, what humans see
     errors: list[str]

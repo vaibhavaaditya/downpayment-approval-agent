@@ -5,7 +5,9 @@ Runs after the model, entirely in code, over Pydantic-validated inputs:
 1. Citation hygiene  — drop citations that don't exist in the evidence pool;
                        if a hard-failed check ends up uncited, force its evidence in.
 2. Label authority    — HARD failure ⇒ APPROVE is unavailable (cap to HOLD);
-                       bank mismatch / injection ⇒ force ESCALATE;
+                       bank mismatch / recent bank change / injection / vendor-PO
+                       mismatch / watchlist ⇒ force ESCALATE; a model-raised injection
+                       flag also forces ESCALATE (it can only tighten);
                        these overrides *always* win over the model.
 3. Action transparency — every mutation is recorded in `guardrail_actions` so the
                        audit log shows exactly what code changed and why.
@@ -75,6 +77,13 @@ def apply_guardrails(draft: Recommendation | None, state: GraphState) -> Recomme
         actions.append("label APPROVE -> HOLD (HARD check failure present)")
         label = Label.HOLD
 
+    # 2b. The model's own injection flag can only tighten: it may add caution, never remove it.
+    if draft.injection_suspected and label is not Label.ESCALATE:
+        actions.append(
+            f"label {label.value} -> ESCALATE (model flagged instructions in vendor text)"
+        )
+        label = Label.ESCALATE
+
     # 3. Soft warnings can never be approved silently either (WARN is not PASS)
     if label is Label.APPROVE and any(c.status is CheckStatus.WARN for c in checks):
         warns = ", ".join(c.check_name for c in checks if c.status is CheckStatus.WARN)
@@ -99,4 +108,7 @@ def apply_guardrails(draft: Recommendation | None, state: GraphState) -> Recomme
         rationale=rationale,
         citations=draft_citations,
         guardrail_actions=actions,
+        injection_suspected=draft.injection_suspected,
+        risk_flags=draft.risk_flags,
+        questions_for_vendor=draft.questions_for_vendor,
     )

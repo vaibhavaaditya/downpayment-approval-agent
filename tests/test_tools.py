@@ -15,7 +15,7 @@ from dpa_agent.models.request import (
     PurchaseOrder,
     Vendor,
 )
-from dpa_agent.tools import run_all_checks
+from dpa_agent.tools import CHECK_REGISTRY, run_all_checks
 from dpa_agent.tools.bank_match import check_bank_match
 from dpa_agent.tools.context import ToolContext
 from dpa_agent.tools.coverage import check_po_coverage
@@ -213,7 +213,7 @@ def test_run_all_checks_covers_all_and_is_deterministic():
     ctx = make_ctx()
     first = run_all_checks(ctx)
     second = run_all_checks(ctx)
-    assert len(first) == 6
+    assert len(first) == len(CHECK_REGISTRY)
     assert [c.check_name for c in first] == [c.check_name for c in second]
     assert all(c.status.value in {"PASS", "WARN", "FAIL"} for c in first)
 

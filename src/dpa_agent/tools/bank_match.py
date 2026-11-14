@@ -71,5 +71,5 @@ def check_bank_match(ctx: ToolContext) -> CheckResult:
 
 
 def _describe(b) -> str:
-    ident, second = b.normalized_identity()
-    return f"{ident} / {second} ({b.bank_country or '?'}, {b.bank_key or '?'})"
+    # Masked: evidence text is sent to the model, returned by the API and written to the audit log.
+    return b.describe_masked()
